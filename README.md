@@ -1,8 +1,9 @@
-# FoundationPose Cluster API
+# 6D Pose Estimation API (Cluster Backend)
 
-This repository provides a Flask-based REST API for 6D object pose estimation using [FoundationPose](https://github.com/NVlabs/FoundationPose). It is designed for GPU-enabled SLURM clusters, where each inference request is dispatched as a separate compute job.
+This repository provides a Flask-based REST API for 6D object pose estimation on SLURM-managed GPU clusters.  
+Each inference request is dispatched as a separate compute job using `srun`.
 
-The system supports base64-encoded RGB-D input, object mesh, camera intrinsics, and returns a 4×4 transformation matrix in SE(3). It is modular and can be extended to support other pose estimation models.
+The system is designed to be **backend-agnostic**: it currently uses [FoundationPose](https://github.com/NVlabs/FoundationPose) as the default model, but can be extended to support other pose estimation pipelines. The input is base64-encoded RGB-D, mask, and mesh; the output is a 4×4 SE(3) pose matrix.
 
 ---
 
