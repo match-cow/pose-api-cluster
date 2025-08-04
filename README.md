@@ -10,11 +10,11 @@ Each API request is processed by launching a new SLURM job via `srun`, using [Fo
 
 ## 1. Overview
 
-- **Input**: RGB image(s), depth map(s), binary mask, camera intrinsics, and a `.ply` mesh — all base64-encoded
-- **Output**: 4×4 SE(3) object-to-camera pose matrix (per frame)
-- **Interface**: REST API (JSON over HTTP)
-- **Execution**: Each request spawns a separate SLURM job using `srun`
-- **Requirements**: GPU-enabled compute node for both server and inference jobs
+- **Input**: RGB image(s), depth map(s), binary mask, camera intrinsics, and a `.ply` mesh — all base64-encoded  
+- **Output**: 4×4 SE(3) object-to-camera pose matrix (per frame)  
+- **Interface**: REST API (JSON over HTTP)  
+- **Execution**: Each request spawns a separate SLURM job using `srun`  
+- **Requirements**: GPU-enabled compute node for both server and inference jobs  
 
 This project was developed and tested on the [LUIS HPC Cluster](https://docs.cluster.uni-hannover.de/doku.php?id=start), but should work on any SLURM-based cluster with GPU access and support for `conda`, `CUDA`, and Python.
 
@@ -33,6 +33,7 @@ pose-api/
 ├── run_request_once.sh           # SLURM job script to handle each request
 ├── launch_cluster_server.sh      # Starts Flask API with proper env setup
 ├── start_compute_node.sh         # Helper to launch GPU-enabled interactive shell
+├── pose_api.log                  # Flask server log file
 └── README.md
 ```
 
@@ -150,7 +151,11 @@ This:
 - Kills any process already on port 5000
 - Starts the Flask server in the background
 
-Logs are saved to `pose_api.log`.
+Logs are saved to `pose_api.log`. You can monitor them with:
+
+```bash
+tail -f pose_api.log
+```
 
 ---
 
@@ -202,8 +207,8 @@ Content-Type: application/json
 }
 ```
 
-- Images must match in size
-- `.ply` mesh only
+- Images must match in size  
+- `.ply` mesh only  
 - Only one object per request (mask + mesh is shared across frames)
 
 ---
@@ -299,11 +304,11 @@ gc.collect()
 
 ## 9. Limitations
 
-- Only `.ply` mesh supported
-- One object per request (shared mask + mesh)
-- Requires GPU (no CPU fallback)
-- Flask is not production-ready — use `gunicorn` for deployment
-- Port conflicts must be resolved manually
+- Only `.ply` mesh supported  
+- One object per request (shared mask + mesh)  
+- Requires GPU (no CPU fallback)  
+- Flask is not production-ready — use `gunicorn` for deployment  
+- Port conflicts must be resolved manually  
 - One request handled at a time (no queueing/multiprocessing)
 
 ---
