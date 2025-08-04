@@ -1,55 +1,116 @@
-# 6D Pose Estimation API (Cluster Backend)
+# 6D Pose Estimation API — Cluster Backend (SLURM)
 
-This repository provides a Flask-based REST API for 6D object pose estimation on SLURM-managed GPU clusters.  
-Each inference request is dispatched as a separate compute job using `srun`.
+This backend provides a **Flask-based REST API** for 6-DoF object pose estimation using RGB-D input and 3D meshes. It is designed to run on **SLURM-managed GPU clusters**.
 
-The system is designed to be **backend-agnostic**: it currently uses [FoundationPose](https://github.com/NVlabs/FoundationPose) as the default model, but can be extended to support other pose estimation pipelines. The input is base64-encoded RGB-D, mask, and mesh; the output is a 4×4 SE(3) pose matrix.
+Each API request is processed by launching a new SLURM job via `srun`, using [FoundationPose](https://github.com/NVlabs/FoundationPose) as the default model. The backend is modular — you can swap in other 6D pose models with minimal changes.
 
----
-
-## Features
-
-- REST API endpoint: `/foundationpose`
-- Accepts base64-encoded RGB-D input, mask, and PLY mesh
-- Launches per-request compute jobs via SLURM (`srun`)
-- Uses FoundationPose to return 6D pose as 4×4 matrix
-- Modular backend architecture for future models
+> This is an extension of the [original single-GPU backend](https://github.com/match-now/pose-api), adapted for cluster environments.
 
 ---
 
-## Folder Structure
+## 1. Overview
+
+- **Input**: RGB image(s), depth map(s), binary mask, camera intrinsics, and a `.ply` mesh — all base64-encoded
+- **Output**: 4×4 SE(3) object-to-camera pose matrix (per frame)
+- **Interface**: REST API (JSON over HTTP)
+- **Execution**: Each request spawns a separate SLURM job using `srun`
+- **Requirements**: GPU-enabled compute node for both server and inference jobs
+
+This project was developed and tested on the [LUIS HPC Cluster](https://docs.cluster.uni-hannover.de/doku.php?id=start), but should work on any SLURM-based cluster with GPU access and support for `conda`, `CUDA`, and Python.
+
+---
+
+## 2. Repository Structure
 
 ```
-foundationpose/
-├── FoundationPose/              # FoundationPose codebase (run_demo.py, weights, etc.)
-├── pose_api_server.py           # Flask server
-├── run_request_once.sh          # Launches per-request SLURM job
-├── launch_cluster_server.sh     # Starts the API server with correct environment
-├── start_compute_node.sh        # Optional helper to open interactive compute shell
+pose-api/
+├── FoundationPose/               # FoundationPose backend (run_demo.py, weights/, etc.)
+│   ├── run_demo.py
+│   ├── weights/
+│   ├── debug/
+│   └── ...
+├── pose_api_server.py            # Flask server logic
+├── run_request_once.sh           # SLURM job script to handle each request
+├── launch_cluster_server.sh      # Starts Flask API with proper env setup
+├── start_compute_node.sh         # Helper to launch GPU-enabled interactive shell
 └── README.md
 ```
 
+> A modified copy of [FoundationPose](https://github.com/NVlabs/FoundationPose) is included under `FoundationPose/`, along with pretrained weights. No additional downloads are required.
+
 ---
 
-## Environment Setup (on Compute Node)
+## 3. Setup Instructions
 
-This project was developed and tested on the [LUIS HPC Cluster](https://docs.cluster.uni-hannover.de/doku.php?id=start), which uses SLURM for resource management and supports modules, Miniconda, and GPU nodes.
+### 3.1 Clone the Repository Locally
+
+On your own machine:
 
 ```bash
-# Load modules
+git clone https://github.com/match-now/pose-api.git
+cd pose-api
+```
+
+---
+
+### 3.2 Upload the Repo to Your Cluster
+
+If you're not already working directly on the cluster, use `scp` or `rsync` to upload:
+
+```bash
+# Example using scp
+scp -r pose-api youruser@your.cluster.edu:/bigwork/youruser/
+
+# Or using rsync
+rsync -av pose-api/ youruser@your.cluster.edu:/bigwork/youruser/pose-api/
+```
+
+> If your cluster allows it, you can also clone the repo directly on the login node.
+
+---
+
+### 3.3 Request a GPU Compute Node
+
+> You **must run the server on a compute node with a GPU**, or it will crash when loading CUDA-based models.
+
+From the login node:
+
+```bash
+cd /bigwork/youruser/pose-api
+bash start_compute_node.sh
+```
+
+This runs:
+
+```bash
+srun --partition=gpu --gres=gpu:1 --pty --time=01:00:00 --mem=16G bash --login
+```
+
+You now have a terminal on a GPU node.
+
+---
+
+### 3.4 Set Up the Python Environment (First Time Only)
+
+In the GPU shell:
+
+```bash
 module purge
 module load GCC/11.2.0
 module load Eigen/3.4.0
 module load CUDA/11.8.0
 module load Miniconda3/24.7.1-0
 
-# Set up Conda
+# Set up conda
 source /sw/apps/software/noarch/Miniconda3/24.7.1-0/etc/profile.d/conda.sh
 conda create -y -p /bigwork/youruser/foundationpose python=3.9
 conda activate /bigwork/youruser/foundationpose
+```
 
-# Install dependencies
-cd /bigwork/youruser/foundationpose/FoundationPose
+Then install dependencies:
+
+```bash
+cd FoundationPose
 pip install -r requirements.txt
 
 # Replace problematic packages
@@ -60,13 +121,9 @@ pip install numpy==1.24.4 scipy==1.10.1
 pip install --no-cache-dir git+https://github.com/NVlabs/nvdiffrast.git
 pip install --no-cache-dir kaolin==0.15.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.0.0_cu118.html
 pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py39_cu118_pyt200/download.html
-
-# Set CUDA paths
-export CUDA_HOME=/sw/apps/software/arch/Core/CUDA/11.8.0
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ```
 
-(Optional) Compile BundleSDF extension:
+Optional (if using BundleSDF):
 
 ```bash
 cd bundlesdf/mycuda
@@ -75,45 +132,36 @@ python setup.py install
 
 ---
 
-## Running the API Server
+## 4. Running the Server
 
-To run the Flask server with CUDA and graphics support, launch it **from a compute node**.
+### Step 1 — Start the Server
 
-### Step 1: Allocate a GPU node
-
-Run this from the login node:
+Still inside the GPU node shell:
 
 ```bash
-./start_compute_node.sh
+cd /bigwork/youruser/pose-api
+bash launch_cluster_server.sh
 ```
 
-Which does:
+This:
+- Loads modules
+- Activates the conda environment
+- Sets environment variables (e.g., `DIR`)
+- Kills any process already on port 5000
+- Starts the Flask server in the background
+
+Logs are saved to `pose_api.log`.
+
+---
+
+### Step 2 — Confirm It’s Running
 
 ```bash
-srun --partition=gpu --gres=gpu:1 --pty --time=01:00:00 --mem=16G bash --login
+curl http://localhost:5000
+# Should return: "it is running!"
 ```
 
-This opens a GPU-enabled interactive shell.
-
-### Step 2: Start the Flask server
-
-Inside the compute node:
-
-```bash
-cd /path/to/foundationpose
-./launch_cluster_server.sh
-```
-
-This script:
-
-- Loads modules (CUDA, Miniconda, etc.)
-- Activates the environment
-- Exports `CUDA_HOME` and `LD_LIBRARY_PATH`
-- Exports `DIR` used internally
-- Starts `pose_api_server.py` on port 5000
-- Logs output to `pose_api.log`
-
-You may need to kill port 5000 manually if restarting:
+If something else is already on port 5000, run:
 
 ```bash
 lsof -i :5000
@@ -122,114 +170,169 @@ kill <PID>
 
 ---
 
-## API Usage
+## 5. API Usage
 
-### Endpoint
+### 5.1 Endpoint
 
 ```
 POST /foundationpose
 Content-Type: application/json
 ```
 
-### Request JSON
+---
+
+### 5.2 Request Format
 
 ```json
 {
-  "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+  "camera_matrix": [
+    ["fx", 0, "cx"],
+    [0, "fy", "cy"],
+    [0, 0, 1]
+  ],
   "images": [
     {
       "filename": "scene1",
-      "rgb": "<base64 PNG>",
-      "depth": "<base64 PNG>"
+      "rgb": "<base64 encoded PNG>",
+      "depth": "<base64 encoded PNG>"
     }
   ],
-  "mask": "<base64 PNG>",
-  "mesh": "<base64 PLY>"
+  "mask": "<base64 encoded PNG>",
+  "mesh": "<base64 encoded PLY>"
 }
 ```
 
-### Response JSON
+- Images must match in size
+- `.ply` mesh only
+- Only one object per request (mask + mesh is shared across frames)
+
+---
+
+### 5.3 Example Request (cURL)
+
+```bash
+curl -X POST http://localhost:5000/foundationpose \
+     -H "Content-Type: application/json" \
+     -d @request.json | jq
+```
+
+> Tip: You can reuse `saved_requests/<uuid>/` from previous jobs to build new requests by re-encoding files to base64.
+
+---
+
+## 6. Output
+
+### 6.1 JSON Response
 
 ```json
 {
   "status": "Pose estimation complete",
-  "transformation_matrix": [[...], [...], [...], [...]]
+  "transformation_matrix": [
+    ["r11", "r12", "r13", "tx"],
+    ["r21", "r22", "r23", "ty"],
+    ["r31", "r32", "r33", "tz"],
+    [0, 0, 0, 1]
+  ]
 }
 ```
 
-### Error Responses
+The matrix is SE(3), row-major, and maps object → camera.
 
-| Code | Meaning                                |
-|------|----------------------------------------|
-| 400  | Missing or invalid fields              |
-| 401  | JSON parse error                       |
-| 402  | Base64 decode error                    |
-| 500  | Inference or matrix validation failure |
+Pose validity is checked before returning:
+- Rotation must be orthogonal (RᵀR ≈ I)
+- Determinant of rotation must be ≈ 1
 
 ---
 
-## Runtime Behavior
-
-The system uses a two-tier architecture:
-
-1. **API Server (Flask)** runs on a GPU compute node (started manually via srun):
-   - Receives and validates incoming POST requests
-   - Writes input data to `saved_requests/<uuid>/`
-   - Launches a separate job using `srun` to run inference
-
-2. **SLURM Job** is dispatched per request:
-   - Runs on a compute node with GPU
-   - Executes `run_request_once.sh`, which launches `run_demo.py`
-   - Writes 4×4 pose matrix to `debug/ob_in_cam/`
-   - Returns result to Flask for response
-
----
-
-## Output Structure (Per Request)
+### 6.2 Files Saved Per Request
 
 ```
-saved_requests/<uuid>/
+FoundationPose/saved_requests/<uuid>/
 ├── cam_K.txt
-├── rgb/       scene1.png
-├── depth/     scene1.png
-├── masks/     scene1.png
-└── mesh/      scene1.ply
+├── rgb/scene1.png
+├── depth/scene1.png
+├── masks/scene1.png
+└── mesh/scene1.ply
 
-debug/ob_in_cam/scene1.txt       # Output 4×4 matrix
+FoundationPose/debug/ob_in_cam/scene1.txt
 ```
 
 ---
 
-## Matrix Validation
+## 7. Runtime Behavior
 
-The returned transformation matrix is checked before sending:
+### Architecture
 
-- The 3×3 rotation block must be orthonormal
-- Determinant of the rotation must be ~1.0
-- Invalid matrices trigger a 500 error response
+```
+[Client sends JSON request]
+        ↓
+[Flask server on GPU node]
+        ↓
+[srun launches run_request_once.sh]
+        ↓
+[run_demo.py runs inference job]
+        ↓
+[4×4 matrix saved and returned]
+```
+
+After inference, GPU memory is cleared:
+
+```python
+torch.cuda.empty_cache()
+torch.cuda.ipc_collect()
+gc.collect()
+```
 
 ---
 
-## Architecture Overview
+## 8. Error Codes
 
-```
-[Client Request]
-       ↓
-[Flask API Server (on compute node)]
-       ↓
-   srun launches new job
-       ↓
-[Second compute node runs run_demo.py]
-       ↓
-[Pose matrix saved → Flask returns JSON]
-```
+| Code | Meaning                             |
+|------|-------------------------------------|
+| 200  | Success                             |
+| 400  | Invalid input fields or shapes      |
+| 401  | Empty or malformed JSON             |
+| 402  | Nested or base64 decoding error     |
+| 500  | Pose failed or invalid matrix       |
 
 ---
 
-## Notes
+## 9. Limitations
 
-- Each request is isolated; inference runs on its own compute node.
-- Only one request is handled at a time (no parallel Flask workers).
-- Assumes large-memory GPUs (e.g. A100 80GB).
-- Flask is for demonstration. For production, use a WSGI server (e.g. gunicorn).
-- Port conflicts might have to be managed manually (port 5000).
+- Only `.ply` mesh supported
+- One object per request (shared mask + mesh)
+- Requires GPU (no CPU fallback)
+- Flask is not production-ready — use `gunicorn` for deployment
+- Port conflicts must be resolved manually
+- One request handled at a time (no queueing/multiprocessing)
+
+---
+
+## 10. Extending to Other Models
+
+You can integrate another model by:
+
+- Replacing `run_pose_estimation()` in `pose_api_server.py`
+- Maintaining the same input/output interface:
+  - Input: base64 JSON
+  - Output: 4×4 SE(3) matrix
+
+Suggested replacements: GDR-Net, CosyPose, your own tracker, etc.
+
+---
+
+## 11. Attribution
+
+This backend uses [FoundationPose](https://github.com/NVlabs/FoundationPose):
+
+```bibtex
+@article{wen2023foundationpose,
+  title     = {FoundationPose: Unified 6D Pose Estimation and Tracking of Novel Objects},
+  author    = {Bowen Wen and Wei Yang and Jan Kautz and Stan Birchfield},
+  journal   = {arXiv preprint arXiv:2312.08344},
+  year      = {2023},
+  url       = {https://arxiv.org/abs/2312.08344}
+}
+```
+
+Please cite their work if you use this system in research or development.
